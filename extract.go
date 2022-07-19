@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,30 +14,26 @@ import (
 )
 
 func GetMachineOSImagesPullspec(registryConfigPath, releasePullSpec string) (string, error) {
-	output := &bytes.Buffer{}
-	ioStreams := genericclioptions.IOStreams{
-		In:     os.Stdin,
-		Out:    output,
-		ErrOut: os.Stderr,
-	}
-
 	// oc adm release info --image-for=machine-os-images <release-pullspec>
 	// TODO(zaneb): filter by local cpu arch
-	inOpts := release.NewInfoOptions(ioStreams)
+	inOpts := release.NewInfoOptions(genericclioptions.IOStreams{})
 	inOpts.Images = []string{releasePullSpec}
-	inOpts.ImageFor = "machine-os-images"
 	inOpts.SecurityOptions.RegistryConfig = registryConfigPath
-	inOpts.ShowPullSpec = true
 
-	if err := inOpts.Run(); err != nil {
-		return "", fmt.Errorf("failed to get %s image: %w", inOpts.ImageFor, err)
-	}
-	machineOSImagesPullspec, err := io.ReadAll(output)
+	release, err := inOpts.LoadReleaseInfo(releasePullSpec, false)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to load release info")
 	}
 
-	return strings.TrimSpace(string(machineOSImagesPullspec)), nil
+	for _, tag := range release.References.Spec.Tags {
+		if tag.Name == "machine-os-images" {
+			if tag.From != nil && tag.From.Kind == "DockerImage" && len(tag.From.Name) > 0 {
+				return tag.From.Name, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no machine-os-images image exists in release image %s", releasePullSpec)
 }
 
 func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, icspFilePath string) (string, error) {

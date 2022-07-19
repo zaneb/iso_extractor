@@ -13,13 +13,25 @@ func main() {
 	klog.InitFlags(fs)
 	fs.Parse([]string{"-v=5"})
 
-	_, err := ExtractISOFile(
-		".",
+	machineOSImagesPullspec, err := GetMachineOSImagesPullspec(
 		"dockerconfig.json",
 		"registry.ci.openshift.org/ocp/release:4.11.0-0.nightly-2022-07-18-173100",
+	)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		os.Exit(1)
+	}
+
+	_, err = ExtractISOHash(
+		".",
+		"dockerconfig.json",
+		machineOSImagesPullspec,
 		"x86_64", // TODO(zaneb): Don't hard-code arch
 		"",       // TODO(zaneb): Pass ICSP tempfile
 	)
 
-	fmt.Printf("%v\n", err)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		os.Exit(2)
+	}
 }

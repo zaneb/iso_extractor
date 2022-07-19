@@ -15,7 +15,7 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-func ExtractISOFile(destDir, registryConfigPath, releasePullSpec, arch, icspFilePath string) (string, error) {
+func GetMachineOSImagesPullspec(registryConfigPath, releasePullSpec string) (string, error) {
 	output := &bytes.Buffer{}
 	ioStreams := genericclioptions.IOStreams{
 		In:     os.Stdin,
@@ -38,17 +38,20 @@ func ExtractISOFile(destDir, registryConfigPath, releasePullSpec, arch, icspFile
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("Found machine-os-images container: %s", machineOSImagesPullspec)
 
+	return strings.TrimSpace(string(machineOSImagesPullspec)), nil
+}
+
+func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, icspFilePath string) (string, error) {
 	// oc image extract --file=/coreos/coreos-x86_64.iso <machine-os-images-pullspec>
 	// TODO(zaneb): filter by target cpu arch
-	ioStreams = genericclioptions.IOStreams{
+	ioStreams := genericclioptions.IOStreams{
 		In:     os.Stdin,
 		Out:    os.Stdout,
 		ErrOut: os.Stderr,
 	}
 	exOpts := extract.NewExtractOptions(ioStreams)
-	isoPath := strings.TrimLeft(fmt.Sprintf("/coreos/coreos-%s.iso", arch), "/")
+	isoPath := strings.TrimLeft(fmt.Sprintf("/coreos/coreos-%s.iso.sha256", arch), "/")
 	exOpts.Files = []string{isoPath}
 	exOpts.ICSPFile = icspFilePath
 	exOpts.FileDir = destDir

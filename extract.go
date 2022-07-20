@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/openshift/library-go/pkg/image/reference"
+
 	"github.com/openshift/oc/pkg/cli/admin/release"
 	"github.com/openshift/oc/pkg/cli/image/archive"
-	"github.com/openshift/oc/pkg/cli/image/imagesource"
 	imagemanifest "github.com/openshift/oc/pkg/cli/image/manifest"
 	"github.com/openshift/oc/pkg/cli/image/strategy"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -57,7 +58,7 @@ func (ex *ISOExtractor) ExtractISOHash(destDir, machineOSImagesPullspec, arch, i
 	isoPath := strings.TrimLeft(fmt.Sprintf("/coreos/coreos-%s.iso.sha256", arch), "/")
 
 	image := strings.TrimSpace(string(machineOSImagesPullspec))
-	imageRef, err := imagesource.ParseReference(image)
+	imageRef, err := reference.Parse(image)
 	if err != nil {
 		return "", fmt.Errorf("Invalid pullspec %s: %w", image, err)
 	}
@@ -71,18 +72,13 @@ func (ex *ISOExtractor) ExtractISOHash(destDir, machineOSImagesPullspec, arch, i
 	}
 
 	ctx := context.Background()
-	fromOpts := &imagesource.Options{
-		FileDir:         destDir,
-		Insecure:        false,
-		RegistryContext: fromContext,
-	}
-	repo, err := fromOpts.Repository(ctx, imageRef)
+	repo, err := fromContext.Repository(ctx, imageRef.RegistryURL(), imageRef.RepositoryName(), false)
 	if err != nil {
 		return "", fmt.Errorf("unable to connect to image repository %s: %w", imageRef.String(), err)
 	}
 
 	filterOptions := imagemanifest.FilterOptions{}
-	srcManifest, location, err := imagemanifest.FirstManifest(ctx, imageRef.Ref, repo, filterOptions.Include)
+	srcManifest, location, err := imagemanifest.FirstManifest(ctx, imageRef, repo, filterOptions.Include)
 	if err != nil {
 		if imagemanifest.IsImageForbidden(err) {
 			return "", fmt.Errorf("image %q does not exist or you don't have permission to access the repository: %w", imageRef.String(), err)

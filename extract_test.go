@@ -7,8 +7,8 @@ import (
 )
 
 func TestGetMachineOSImages(t *testing.T) {
-	pullspec, err := GetMachineOSImagesPullspec(
-		"dockerconfig.json",
+	extractor := NewISOExtractor("dockerconfig.json")
+	pullspec, err := extractor.GetMachineOSImagesPullspec(
 		"registry.ci.openshift.org/ocp/release:4.11.0-0.nightly-2022-07-18-173100",
 	)
 	if err != nil {
@@ -23,9 +23,9 @@ func TestExtractISOHash(t *testing.T) {
 	outputFile := "coreos-x86_64.iso.sha256"
 	os.Remove(outputFile)
 
-	_, err := ExtractISOHash(
+	extractor := NewISOExtractor("dockerconfig.json")
+	_, err := extractor.ExtractISOHash(
 		".",
-		"dockerconfig.json",
 		"quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:6f0deb29b974061db04b35bb0e6171d7e9a241cc78c6c09bd1a0c10cc3c2f085",
 		"x86_64",
 		"",

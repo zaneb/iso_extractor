@@ -10,19 +10,30 @@ import (
 
 	"github.com/openshift/oc/pkg/cli/admin/release"
 	"github.com/openshift/oc/pkg/cli/image/archive"
-	"github.com/openshift/oc/pkg/cli/image/extract"
 	"github.com/openshift/oc/pkg/cli/image/imagesource"
 	imagemanifest "github.com/openshift/oc/pkg/cli/image/manifest"
 	"github.com/openshift/oc/pkg/cli/image/strategy"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-func GetMachineOSImagesPullspec(registryConfigPath, releasePullSpec string) (string, error) {
+type ISOExtractor struct {
+	registryData imagemanifest.SecurityOptions
+}
+
+func NewISOExtractor(registryConfigPath string) *ISOExtractor {
+	return &ISOExtractor{
+		registryData: imagemanifest.SecurityOptions{
+			RegistryConfig: registryConfigPath,
+		},
+	}
+}
+
+func (ex *ISOExtractor) GetMachineOSImagesPullspec(releasePullSpec string) (string, error) {
 	// oc adm release info --image-for=machine-os-images <release-pullspec>
 	// TODO(zaneb): filter by local cpu arch
 	inOpts := release.NewInfoOptions(genericclioptions.IOStreams{})
 	inOpts.Images = []string{releasePullSpec}
-	inOpts.SecurityOptions.RegistryConfig = registryConfigPath
+	inOpts.SecurityOptions = ex.registryData
 
 	release, err := inOpts.LoadReleaseInfo(releasePullSpec, false)
 	if err != nil {
@@ -40,12 +51,10 @@ func GetMachineOSImagesPullspec(registryConfigPath, releasePullSpec string) (str
 	return "", fmt.Errorf("no machine-os-images image exists in release image %s", releasePullSpec)
 }
 
-func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, icspFilePath string) (string, error) {
+func (ex *ISOExtractor) ExtractISOHash(destDir, machineOSImagesPullspec, arch, icspFilePath string) (string, error) {
 	// oc image extract --file=/coreos/coreos-x86_64.iso <machine-os-images-pullspec>
 	// TODO(zaneb): filter by target cpu arch
-	exOpts := extract.NewExtractOptions(genericclioptions.IOStreams{})
 	isoPath := strings.TrimLeft(fmt.Sprintf("/coreos/coreos-%s.iso.sha256", arch), "/")
-	exOpts.SecurityOptions.RegistryConfig = registryConfigPath
 
 	image := strings.TrimSpace(string(machineOSImagesPullspec))
 	imageRef, err := imagesource.ParseReference(image)
@@ -53,7 +62,7 @@ func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, 
 		return "", fmt.Errorf("Invalid pullspec %s: %w", image, err)
 	}
 
-	fromContext, err := exOpts.SecurityOptions.Context()
+	fromContext, err := ex.registryData.Context()
 	if err != nil {
 		return "", err
 	}
@@ -72,7 +81,8 @@ func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, 
 		return "", fmt.Errorf("unable to connect to image repository %s: %w", imageRef.String(), err)
 	}
 
-	srcManifest, location, err := imagemanifest.FirstManifest(ctx, imageRef.Ref, repo, exOpts.FilterOptions.Include)
+	filterOptions := imagemanifest.FilterOptions{}
+	srcManifest, location, err := imagemanifest.FirstManifest(ctx, imageRef.Ref, repo, filterOptions.Include)
 	if err != nil {
 		if imagemanifest.IsImageForbidden(err) {
 			return "", fmt.Errorf("image %q does not exist or you don't have permission to access the repository: %w", imageRef.String(), err)

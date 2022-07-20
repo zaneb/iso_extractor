@@ -13,8 +13,9 @@ func main() {
 	klog.InitFlags(fs)
 	fs.Parse([]string{"-v=5"})
 
-	machineOSImagesPullspec, err := GetMachineOSImagesPullspec(
-		"dockerconfig.json",
+	extractor := NewISOExtractor("dockerconfig.json")
+
+	machineOSImagesPullspec, err := extractor.GetMachineOSImagesPullspec(
 		"registry.ci.openshift.org/ocp/release:4.11.0-0.nightly-2022-07-18-173100",
 	)
 	if err != nil {
@@ -22,9 +23,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, err = ExtractISOHash(
+	_, err = extractor.ExtractISOHash(
 		".",
-		"dockerconfig.json",
 		machineOSImagesPullspec,
 		"x86_64", // TODO(zaneb): Don't hard-code arch
 		"",       // TODO(zaneb): Pass ICSP tempfile

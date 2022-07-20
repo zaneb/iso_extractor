@@ -1,15 +1,19 @@
 package main
 
 import (
+	"archive/tar"
+	"context"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/openshift/oc/pkg/cli/admin/release"
+	"github.com/openshift/oc/pkg/cli/image/archive"
 	"github.com/openshift/oc/pkg/cli/image/extract"
 	"github.com/openshift/oc/pkg/cli/image/imagesource"
+	imagemanifest "github.com/openshift/oc/pkg/cli/image/manifest"
+	"github.com/openshift/oc/pkg/cli/image/strategy"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
@@ -39,16 +43,8 @@ func GetMachineOSImagesPullspec(registryConfigPath, releasePullSpec string) (str
 func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, icspFilePath string) (string, error) {
 	// oc image extract --file=/coreos/coreos-x86_64.iso <machine-os-images-pullspec>
 	// TODO(zaneb): filter by target cpu arch
-	ioStreams := genericclioptions.IOStreams{
-		In:     os.Stdin,
-		Out:    os.Stdout,
-		ErrOut: os.Stderr,
-	}
-	exOpts := extract.NewExtractOptions(ioStreams)
+	exOpts := extract.NewExtractOptions(genericclioptions.IOStreams{})
 	isoPath := strings.TrimLeft(fmt.Sprintf("/coreos/coreos-%s.iso.sha256", arch), "/")
-	exOpts.Files = []string{isoPath}
-	exOpts.ICSPFile = icspFilePath
-	exOpts.FileDir = destDir
 	exOpts.SecurityOptions.RegistryConfig = registryConfigPath
 
 	image := strings.TrimSpace(string(machineOSImagesPullspec))
@@ -57,18 +53,89 @@ func ExtractISOHash(destDir, registryConfigPath, machineOSImagesPullspec, arch, 
 		return "", fmt.Errorf("Invalid pullspec %s: %w", image, err)
 	}
 
-	exOpts.Mappings = []extract.Mapping{
-		{
-			Image:    image,
-			ImageRef: imageRef,
-			From:     isoPath,
-			To:       ".",
-		},
+	fromContext, err := exOpts.SecurityOptions.Context()
+	if err != nil {
+		return "", err
+	}
+	if len(icspFilePath) > 0 {
+		fromContext = fromContext.WithAlternateBlobSourceStrategy(strategy.NewICSPOnErrorStrategy(icspFilePath))
 	}
 
-	if err := exOpts.Run(); err != nil {
-		return "", fmt.Errorf("failed to extract ISO: %w", err)
+	ctx := context.Background()
+	fromOpts := &imagesource.Options{
+		FileDir:         destDir,
+		Insecure:        false,
+		RegistryContext: fromContext,
+	}
+	repo, err := fromOpts.Repository(ctx, imageRef)
+	if err != nil {
+		return "", fmt.Errorf("unable to connect to image repository %s: %w", imageRef.String(), err)
 	}
 
-	return path.Join(destDir, filepath.Base(isoPath)), nil
+	srcManifest, location, err := imagemanifest.FirstManifest(ctx, imageRef.Ref, repo, exOpts.FilterOptions.Include)
+	if err != nil {
+		if imagemanifest.IsImageForbidden(err) {
+			return "", fmt.Errorf("image %q does not exist or you don't have permission to access the repository: %w", imageRef.String(), err)
+		}
+		if imagemanifest.IsImageNotFound(err) {
+			return "", fmt.Errorf("image %q not found: %w", imageRef.String(), err)
+		}
+		return "", fmt.Errorf("unable to read image %q: %v", imageRef.String(), err)
+	}
+
+	fromBlobs := repo.Blobs(ctx)
+	_, layers, err := imagemanifest.ManifestToImageConfig(ctx, srcManifest, fromBlobs, location)
+	if err != nil {
+		return "", fmt.Errorf("unable to parse image %s: %w", imageRef.String(), err)
+	}
+
+	for _, layer := range layers {
+		cont, err := func() (bool, error) {
+			r, err := fromBlobs.Open(ctx, layer.Digest)
+			if err != nil {
+				return false, fmt.Errorf("Unable to access the source layer %s: %w", layer.Digest, err)
+			}
+			defer r.Close()
+
+			options := &archive.TarOptions{
+				AlterHeaders: &tarHeaderAlterer{
+					dir:  path.Dir(isoPath) + "/",
+					name: path.Base(isoPath),
+				},
+			}
+
+			if _, err := archive.ApplyLayer(".", r, options); err != nil {
+				return false, fmt.Errorf("unable to extract layer %s from %s: %w", layer.Digest, imageRef.String(), err)
+			}
+			return true, nil
+		}()
+		if err != nil {
+			return "", err
+		}
+		if !cont {
+			break
+		}
+	}
+
+	return filepath.Join(destDir, path.Base(isoPath)), nil
+}
+
+type tarHeaderAlterer struct {
+	dir  string
+	name string
+}
+
+func (a *tarHeaderAlterer) Alter(hdr *tar.Header) (bool, error) {
+	if !strings.HasPrefix(hdr.Name, a.dir) {
+		return false, nil
+	}
+	hdr.Name = strings.TrimPrefix(hdr.Name, a.dir)
+	matchName := hdr.Name
+	if i := strings.Index(matchName, "/"); i >= 0 {
+		matchName = matchName[:i]
+	}
+	if ok, err := path.Match(a.name, matchName); !ok || err != nil {
+		return false, err
+	}
+	return true, nil
 }
